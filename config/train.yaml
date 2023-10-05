@@ -1,0 +1,89 @@
+defaults:
+  # - model: schnet_like
+  - trainer: default
+  - _self_
+
+seed: 0
+
+# 1. Параметры данных
+datamodule:
+  _target_: inverse_folding.data.datamodule.DataModule
+  # путь до данных
+  datadir: data/pdb
+  train_csv: data/train.csv
+  val_csv: data/val.csv
+  batch_size: 16  # по сколько примеров пакуем в батч
+  dataset_fn:
+    _target_: inverse_folding.data.dataset.NodeClassificationDataset
+    _partial_: true
+    resnum_encoder:
+      # DummyEncoding: все позиции неразличимы
+      # ChainPositionEncoding: кодируем только порядковый номер аминокислоты внутри цепи
+      # ChothiaNumberingEncoding: уникальный индекс для сочетания VH/VL + номер позиции + код вставки для схемы Chothia
+      _target_: inverse_folding.data.transforms.DummyEncoding
+      # _target_: inverse_folding.data.transforms.ChainPositionEncoding
+      # _target_: inverse_folding.data.transforms.ChothiaNumberingEncoding
+      
+
+# 2. Параметры модели
+lightning:
+  _target_: inverse_folding.models.lightning.Lit
+  model: # ${model}
+    _target_: inverse_folding.models.schnet_like.NodeClassification
+    embedding_dim: 64  # размер вектора для внутреннего представления аминокислоты
+    cutoff: 10.0  # максимальное расстояние между Ca атомами, при котором строится ребро между аминокислотами
+    max_neighbors: 15  # максимальное число рёбер для каждой аминокислоты в графе
+    num_gaussians: 32  # количество бинов, на которые раскладывается расстояние между Ca атомами
+    num_filters: 8  # размер вектора для внутреннего представления ребра в графе
+    num_layers: 3  # количество слоёв внутри графовой сети
+    output_dim: 20  # размер вектора на выходе из сети для аминокислоты (мы предсказываем одну из 20 букв)
+    transform: ${datamodule.dataset_fn.resnum_encoder}  # добавляем для согласованности модели и данных
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 0.001
+    weight_decay: 0.01
+
+# 3. Параметры обучения
+trainer:
+  max_epochs: 200
+  log_every_n_steps: 10
+
+# 4. Технические параметры
+experiment_name: inverse_folding
+output_dir: ${hydra:runtime.output_dir}
+logdir: logs/
+
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: val_loss
+    mode: "min"
+    dirpath: ${output_dir}/checkpoints
+    filename: "epoch_{epoch:03d}"
+    save_last: False
+    save_top_k: 1
+    auto_insert_metric_name: False
+  print_sequences:
+    _target_: inverse_folding.utils.callbacks.PrintSequences
+    n_samples: 10
+  confusion_matrix:
+    _target_: inverse_folding.utils.callbacks.ConfusionMatrixPlotCallback
+    class_labels: ACDEFGHIKLMNPQRSTVWY
+    normalize: "true"
+    
+
+logger:
+  aim:
+    _target_: aim.pytorch_lightning.AimLogger
+    repo: ${logdir}/
+    # repo: aim://one-q.bi.biocad.ru:30146
+    experiment: ${experiment_name}
+
+hydra:
+  run:
+    dir: ${logdir}/runs/${now:%Y-%m-%d}/${now:%H:%M:%S}
+
+  sweep:
+    dir: ${logdir}/multiruns/${now:%Y-%m-%d}/${now:%H:%M:%S}/
+    subdir: ${hydra.job.override_dirname}

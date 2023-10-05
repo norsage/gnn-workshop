@@ -1,0 +1,14 @@
+.vscode/
+__pycache__
+.DS_Store
+/logs/
+/outputs/
+/notebooks/
+/*.pt
+*.zip
+/*.py
+/*.gif
+/*.png
+*_.py
+pyproject.toml
+.flake8
